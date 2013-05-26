@@ -1,0 +1,42 @@
+# Copyright (c) 2000 by Tsuyoshi Ishii. All rights reserved. -----------------#
+# Allegro --------------------------------------------------------------------#
+
+CC = gcc
+CFLAGS = -m386 -msoft-float -fno-builtin
+LD = ld
+AS86 = as86
+LD86 = ld86
+LDFLAGS = -n -Ttext=0x2e00 -static
+#LDFLAGS = -n -Ttext=0 -static
+
+OBJS = start.o 386.o floppy.o
+
+#mac: $(OBJS)
+#	$(LD) $(LDFLAGS) $(OBJS)
+all: start genasm u a
+start: start.o
+	$(LD86) -0 -s -o _start start.o
+	dd if=_start of=start bs=16w skip=1
+	rm -f _start
+start.o: start.s
+	$(AS86) -0 -a -o start.o start.s
+clean:
+	rm -rf *.o
+
+genasm: genasm.o
+	$(CC) -o genasm genasm.o
+u	: bootstrap.o u.o
+	$(LD) $(LDFLAGS) -e bootstrap -o u bootstrap.o u.o
+	strip u
+	./a.out u uu	
+#	$(LD) $(LDFLAGS) -e bootstrap -o _u bootstrap.o u.o
+#	strip _u
+#	dd if=_u of=u bs=16w skip=1
+#	rm _u
+
+a: a.o
+	$(LD86) -0 -s -o _a a.o
+	dd if=_a of=a bs=16w skip=1
+	rm -f _a
+a.o: a.s
+	$(AS86) -0 -a -o a.o a.s

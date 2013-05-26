@@ -1,0 +1,701 @@
+/* original code is from http://....-----------------------------------------*/
+/* Copyright (c) 2000 by Tsuyoshi Ishii. All rights reserved. ---------------*/
+#include "video.h"
+#include "klib.h"
+#include "io.h"
+#include "ne2000.h"
+#include "ne2000P.h"
+
+static int	curr_page;
+static int	bound_page;
+
+static ring_buf_t	rb;
+static int	rx_start;
+static int	rx_bound;
+static int	rx_len;
+static int	rx_sub_len;
+static int	rx_remain_len;
+
+/* ne2000_init --------------------------------------------------------------*/
+void
+ne2000_init()
+{
+	int	i;
+/*
+	int	sendq_nr;
+	int	offset_page;
+	int	ramsize;
+	short	s;
+*/
+
+	/* stop remote DMA */
+	outb(IO_DP8390 + DP_CR, CR_DM_ABORT | CR_STP);
+
+#if 0
+	/* FIFO */
+	outb(IO_DP8390 + DP_DCR, DCR_8BYTES | DCR_WORDWIDE | DCR_BMS);
+#else
+	outb(IO_DP8390 + DP_DCR, DCR_8BYTES | DCR_BYTEWIDE | DCR_BMS);
+#endif
+
+	/* clear DMA byte count */
+	outb(IO_DP8390 + DP_RBCR0, 0);
+	outb(IO_DP8390 + DP_RBCR1, 0);
+
+	/* monitor mode */
+	outb(IO_DP8390 + DP_RCR, RCR_MON);
+
+	/* internal loopback mode */
+	outb(IO_DP8390 + DP_TCR, TCR_INTERNAL);
+
+	/* specify ring buffer of start address for transfering */
+	outb(IO_DP8390 + DP_TSR, PAGE_TX_START);
+	outb(IO_DP8390 + DP_PSTART, PAGE_RX_START);
+	outb(IO_DP8390 + DP_BNRY, PAGE_RX_START);
+	outb(IO_DP8390 + DP_PSTOP, PAGE_END);
+
+	/* clear interrupt flag */
+	outb(IO_DP8390 + DP_ISR, 0xff);
+
+	/* configure enabling interrupt */
+	outb(IO_DP8390 + DP_IMR, IMR_PRXE);
+#if 1
+	/* old code start ---------------------------------------------------*/
+	outb(IO_DP8390 + DP_RBCR0, 6 * 2);
+	outb(IO_DP8390 + DP_RBCR1, 0);
+	outb(IO_DP8390 + DP_RSAR0, 0);
+	outb(IO_DP8390 + DP_RSAR1, 0);
+	outb(IO_DP8390 + DP_CR, CR_DM_RR | CR_PS_P0 | CR_STA);
+
+	/* Mmm... card is 8bit ??? ne1000 ??? */
+	printk("Ethernet = ");
+	for (i = 0 ; i < 5 ; i ++) {
+		ed.ether[i] = (char)inw(IO_NE2000 + NE_DATA) & 0xff;	
+		printk("%x:", ed.ether[i]);
+	}
+	ed.ether[i] = (char)inw(IO_NE2000 + NE_DATA) & 0xff;	
+	printk("%x\n", ed.ether[i]);
+	/* old code end -----------------------------------------------------*/
+#endif
+
+	/* configure page 1 */
+	outb(IO_DP8390 + DP_CR, CR_DM_ABORT | CR_PS_P1 | CR_STP);
+	/* set up ethernet address */
+#if 1
+	outb(IO_DP8390 + DP_PAR0, ed.ether[0]);
+	outb(IO_DP8390 + DP_PAR1, ed.ether[1]);
+	outb(IO_DP8390 + DP_PAR2, ed.ether[2]);
+	outb(IO_DP8390 + DP_PAR3, ed.ether[3]);
+	outb(IO_DP8390 + DP_PAR4, ed.ether[4]);
+	outb(IO_DP8390 + DP_PAR5, ed.ether[5]);
+#else
+	outb(IO_DP8390 + DP_PAR0, 0x00);
+	outb(IO_DP8390 + DP_PAR1, 0xe0);
+	outb(IO_DP8390 + DP_PAR2, 0x98);
+	outb(IO_DP8390 + DP_PAR3, 0x16);
+	outb(IO_DP8390 + DP_PAR4, 0x06);
+	outb(IO_DP8390 + DP_PAR5, 0x66);
+#endif
+
+	/* set up page number for first received packet */
+	outb(IO_DP8390 + DP_CURR, PAGE_RX_START + 1);
+
+	/* set up muiticast register */
+	outb(IO_DP8390 + DP_MAR0, 0);
+	outb(IO_DP8390 + DP_MAR1, 0);
+	outb(IO_DP8390 + DP_MAR2, 0);
+	outb(IO_DP8390 + DP_MAR3, 0);
+	outb(IO_DP8390 + DP_MAR4, 0);
+	outb(IO_DP8390 + DP_MAR5, 0);
+	outb(IO_DP8390 + DP_MAR6, 0);
+	outb(IO_DP8390 + DP_MAR7, 0);
+
+	/* configure page 1 */
+	outb(IO_DP8390 + DP_CR, CR_DM_ABORT | CR_STP);
+#if 0
+	/* promiscious mode -------------------------------------------------*/
+	outb(IO_DP8390 + DP_RCR, RCR_AB | RCR_PRO | RCR_AM
+			| RCR_AB | RCR_AM);
+#else
+	/* normal mode (broadcast + multicast) ------------------------------*/
+	/* setup filtering for received packet */
+	outb(IO_DP8390 + DP_RCR, RCR_AB | RCR_AM);
+#endif
+#if 1	
+
+	/* activate NIC */
+	outb(IO_DP8390 + DP_CR, CR_DM_ABORT | CR_STA);
+
+	/* enter normal mode */
+	outb(IO_DP8390 + DP_TCR, 0);
+#else
+	inb(IO_DP8390 + DP_CNTR0);
+	inb(IO_DP8390 + DP_CNTR1);
+	inb(IO_DP8390 + DP_CNTR2);
+	outb(IO_DP8390 + DP_IMR, IMR_PRXE | IMR_PTXE | IMR_RXEE | IMR_TXEE | 
+		IMR_OVWE | IMR_CNTE); 
+	outb(IO_DP8390 + DP_CR, CR_STA | CR_DM_ABORT);
+	outb(IO_DP8390 + DP_TCR, 0);
+#endif
+
+#if  0
+	offset_page = NE2000_START / DP_PAGESIZE; 
+	ramsize = NE2000_SIZE;
+	sendq_nr = NE2000_SIZE / 0x2000;
+	ed.sendpage = offset_page;
+
+	/* dp8390 initialization --------------------------------------------*/
+	outb(IO_DP8390 + DP_CR, CR_PS_P0 | CR_STP | CR_DM_ABORT);
+	outb(IO_DP8390 + DP_IMR, 0);
+
+	outb(IO_DP8390 + DP_PSTART, offset_page + sendq_nr * SENDQ_PAGES);
+	ed.startpage = offset_page + sendq_nr * SENDQ_PAGES;
+	outb(IO_DP8390 + DP_PSTOP, offset_page + ramsize / DP_PAGESIZE);
+	ed.stoppage = offset_page + ramsize / DP_PAGESIZE;
+	outb(IO_DP8390 + DP_BNRY, offset_page + sendq_nr * SENDQ_PAGES);
+	outb(IO_DP8390 + DP_RCR, RCR_MON);
+	outb(IO_DP8390 + DP_TCR, TCR_NORMAL);
+#if 0
+	/* 16 bit */
+	outb(IO_DP8390 + DP_DCR, DCR_WORDWIDE | DCR_8BYTES | DCR_BMS);
+#else
+	/* 8 bit */	
+	outb(IO_DP8390 + DP_DCR, DCR_BYTEWIDE | DCR_8BYTES | DCR_BMS);
+#endif
+	outb(IO_DP8390 + DP_RBCR0, 0);
+	outb(IO_DP8390 + DP_RBCR1, 0);
+	outb(IO_DP8390 + DP_ISR, 0xff);
+	outb(IO_DP8390 + DP_CR, CR_PS_P1 | CR_DM_ABORT);
+
+	outb(IO_DP8390 + DP_PAR0, ed.ether[0]);
+	outb(IO_DP8390 + DP_PAR1, ed.ether[1]);
+	outb(IO_DP8390 + DP_PAR2, ed.ether[2]);
+	outb(IO_DP8390 + DP_PAR3, ed.ether[3]);
+	outb(IO_DP8390 + DP_PAR4, ed.ether[4]);
+	outb(IO_DP8390 + DP_PAR5, ed.ether[5]);
+
+	outb(IO_DP8390 + DP_MAR0, 0xff);
+	outb(IO_DP8390 + DP_MAR1, 0xff);
+	outb(IO_DP8390 + DP_MAR2, 0xff);
+	outb(IO_DP8390 + DP_MAR3, 0xff);
+	outb(IO_DP8390 + DP_MAR4, 0xff);
+	outb(IO_DP8390 + DP_MAR5, 0xff);
+	outb(IO_DP8390 + DP_MAR6, 0xff);
+	outb(IO_DP8390 + DP_MAR7, 0xff);
+	outb(IO_DP8390 + DP_CURR, offset_page + sendq_nr * SENDQ_PAGES + 1);
+	outb(IO_DP8390 + DP_CR, CR_PS_P0 | CR_DM_ABORT);
+
+#if 0
+	/* promiscious ------------------------------------------------------*/
+	outb(IO_DP8390 + DP_RCR, RCR_AB | RCR_PRO | RCR_AM
+			| RCR_AB | RCR_AM);
+	/* promiscious ------------------------------------------------------*/
+#else
+	outb(IO_DP8390 + DP_RCR, RCR_AB);
+#endif
+
+	inb(IO_DP8390 + DP_CNTR0);
+	inb(IO_DP8390 + DP_CNTR1);
+	inb(IO_DP8390 + DP_CNTR2);
+
+	outb(IO_DP8390 + DP_IMR, IMR_PRXE | IMR_PTXE | IMR_RXEE | IMR_TXEE | 
+		IMR_OVWE | IMR_CNTE); 
+	outb(IO_DP8390 + DP_CR, CR_STA | CR_DM_ABORT);
+
+#endif
+	printk("ne2000: initialized\n");
+}
+
+/* ne2000_probe -------------------------------------------------------------*/
+void
+ne2000_probe()
+{
+	char	c;
+	int	i;
+
+	/* ne2000 and dp8390 has same I/O port ------------------------------*/
+	c = inb(IO_NE2000 + NE_RESET);
+	for (i = 0 ; i < 20000 ; i ++); 
+	outb(IO_NE2000 + NE_RESET, c);
+	for (i = 0 ; i < 20000 ; i ++); 
+	outb(IO_DP8390 + DP_CR, CR_STP | CR_DM_ABORT);
+	for (i = 0 ; i < 20000 ; i ++); 
+	/* disable storing packet to memory */
+	outb(IO_DP8390 + DP_RCR, RCR_MON);
+	outb(IO_DP8390 + DP_DCR, DCR_WTS | DCR_8BYTES | DCR_BMS);
+
+	/* set top address of buffer */
+	outb(IO_DP8390 + DP_PSTART, PAGE_START);
+	outb(IO_DP8390 + DP_PSTOP, PAGE_END);
+	
+#if 0
+	/* test pattern */
+#endif
+
+	outb(IO_DP8390 + DP_ISR, 0xff);
+#if 0
+
+	for (i = 0 ; i < 2000 ; i ++) {
+		if ((inb(IO_DP8390 + DP_ISR) & ISR_RST) != 0)
+			break;
+	}
+
+	if ((inb(IO_DP8390 + DP_CR) & (CR_STP | CR_DM_ABORT)) !=
+						(CR_STP | CR_DM_ABORT)) {
+		/*** ERROR ***/
+		return;
+	}
+	outb(IO_DP8390 + DP_RCR, RCR_MON);
+	outb(IO_DP8390 + DP_TCR, TCR_NORMAL);
+	/* ne2000 is 16bit --------------------------------------------------*/
+	outb(IO_DP8390 + DP_DCR, DCR_WORDWIDE | DCR_8BYTES | DCR_BMS);
+
+	if (ne2000_test(NE2000_START)) {
+		printk("NE2000 initialize ok\n");
+	}
+#endif
+}
+
+static int
+ne2000_test(int pos)
+{
+	static char	pat[7] = "abcdef";
+	int	i;
+	outb(IO_DP8390 + DP_ISR, 0xff);
+	outb(IO_DP8390 + DP_RBCR0, 4);
+	outb(IO_DP8390 + DP_RBCR1, 0);
+	outb(IO_DP8390 + DP_RSAR0, pos & 0xff);
+	outb(IO_DP8390 + DP_RSAR1, pos >> 8);
+	outb(IO_DP8390 + DP_CR, CR_DM_RW | CR_PS_P0 | CR_STA);
+
+	for (i = 0 ; i < 3 ; i += 2) {
+		outb(IO_NE2000 + NE_DATA, *(short*)(pat + i));
+	}
+
+	for (i = 0 ; i < 1000 ; i ++) {
+		if (inb(IO_DP8390 + DP_ISR) & ISR_RDC)
+			break;
+	}
+	if (i >= 1000) {
+		printk("NE2000:DMA failed\n");
+		return 0;
+	}
+	outb(IO_DP8390 + DP_RBCR0, 4);
+	outb(IO_DP8390 + DP_RBCR1, 0);
+	outb(IO_DP8390 + DP_RSAR0, pos & 0xff);
+	outb(IO_DP8390 + DP_RSAR1, pos >> 8);
+	outb(IO_DP8390 + DP_CR, CR_DM_RR | CR_PS_P0 | CR_STA);
+
+	for (i = 0 ; i < 3 ; i += 2) {
+		inw(IO_NE2000 + NE_DATA);
+	}
+	return 1;
+}
+
+void
+ne2000_loop()
+{
+	char c;
+	int	i;
+	for (i = 0 ; i < 10000 ; i ++) {
+		c = inb(IO_DP8390 + DP_ISR);
+		printk("[");
+		printk("%x", c);
+		printk("]");
+	}
+}
+
+/* ne2000_snd ---------------------------------------------------------------*/
+void
+ne2000_snd(char* buf, int len)
+{
+#if 1
+	while ((inb(IO_DP8390 + DP_CR) & 0x4) != 0)
+		;
+
+	/* disble interrupt */
+#if 0
+	ne2000_memwrite(buf, (PAGE_TX_START << 8), len);
+#else
+	ne2000_memwrite(buf, (PAGE_TX_START << 8), 6);
+	ne2000_memwrite(buf + 6, (PAGE_TX_START << 8) + 6, 6);
+	ne2000_memwrite(buf + 12, (PAGE_TX_START << 8) + 12, 2);
+	ne2000_memwrite(buf + 14, (PAGE_TX_START << 8) + 14, len - 14);
+#endif
+
+	/* enable interrupt */
+/*
+	outb(IO_DP8390 + DP_CR, CR_PS_P0 | CR_DM_ABORT | CR_STA);
+*/
+	outb(IO_DP8390 + DP_TPSR, PAGE_TX_START);
+
+	outb(IO_DP8390 + DP_TBCR0, len & 0xff);
+	outb(IO_DP8390 + DP_TBCR1, (len >> 8) & 0xff);
+#if 1	
+	outb(IO_DP8390 + DP_CR, CR_PS_P0 | CR_TXP | CR_DM_ABORT | CR_STA);
+#else
+	outb(IO_DP8390 + DP_CR, CR_PS_P0 | CR_TXP);
+#endif
+	while ((inb(IO_DP8390 + DP_CR) & 0x4) != 0)
+		;
+#endif
+#if 0
+	int	i;
+	outb(IO_DP8390 + DP_ISR, ISR_RDC);
+	outb(IO_DP8390 + DP_RBCR0, len & 0xff);
+	outb(IO_DP8390 + DP_RBCR1, (len >> 8) & 0xff);
+	outb(IO_DP8390 + DP_RSAR0, (PAGE_TX_START * DP_PAGESIZE) & 0xff);
+	outb(IO_DP8390 + DP_RSAR1, (PAGE_TX_START * DP_PAGESIZE) >> 8);
+	outb(IO_DP8390 + DP_CR, CR_DM_RW | CR_PS_P0 | CR_STA);
+
+	for (i = 0 ; i < len ; i ++) {
+		outb(DP_DATA, buf[i]);
+	}
+	outb(IO_DP8390 + DP_TPSR, PAGE_TX_START);
+	outb(IO_DP8390 + DP_TBCR0, len & 0xff);
+	outb(IO_DP8390 + DP_TBCR1, len >> 8);
+	outb(IO_DP8390 + DP_CR, CR_TXP);
+printk("ne2000:snd ok\n");
+#endif
+#if 0
+	int	i;
+	outb(IO_DP8390 + DP_ISR, ISR_RDC);
+	outb(IO_DP8390 + DP_RBCR0, len & 0xff);
+	outb(IO_DP8390 + DP_RBCR1, (len >> 8) & 0xff);
+	outb(IO_DP8390 + DP_RSAR0, (ed.sendpage * DP_PAGESIZE) & 0xff);
+	outb(IO_DP8390 + DP_RSAR1, (ed.sendpage * DP_PAGESIZE) >> 8);
+	outb(IO_DP8390 + DP_CR, CR_DM_RW | CR_PS_P0 | CR_STA);
+
+	for (i = 0 ; i < len ; i ++) {
+		outb(DP_DATA, c[i]);
+	}
+/*
+	for (i = 0 ; i < 100000 ; i ++) {
+		if (inb(IO_DP8390 + DP_ISR) & ISR_RDC)
+			break;
+	}
+	if (i >= 100000)
+		printk("ne2000:snd ERROR\n");
+*/
+	outb(IO_DP8390 + DP_TPSR, ed.sendpage);
+	outb(IO_DP8390 + DP_TBCR0, len & 0xff);
+	outb(IO_DP8390 + DP_TBCR1, len >> 8);
+	outb(IO_DP8390 + DP_CR, CR_TXP);
+printk("ne2000:snd ok\n");
+#endif
+}
+
+/* ne2000_rcv ---------------------------------------------------------------*/
+int
+ne2000_rcv(char* buf, int len)
+{
+	int	flag;
+/*
+	rcv_header_t	header;
+	ethernet_t	ether;
+	unsigned int	page_no, curr, next;
+*/
+char*	buf2 = buf;
+int	len2;
+	void	ether_input(char*, int);
+
+	/* page 0 */
+	outb(IO_DP8390 + DP_CR, CR_STA);
+	/* rx status register */
+	flag = inb(IO_DP8390 + DP_RSR);
+	if ((flag & RSR_FO) != 0)
+		return 0;
+
+	/* rx ring buffer over flow */
+	if ((inb(IO_DP8390 + DP_ISR) & ISR_OVW) != 0)
+		return 0;
+
+	/* rx success */
+	if ((flag & RSR_PRX) == 0)
+		return 0;		/* no received packet */
+
+	bound_page = inb(IO_DP8390 + DP_BNRY) + 1;
+	if (bound_page == PAGE_RX_END)
+		bound_page = PAGE_RX_START;
+
+	outb(IO_DP8390 + DP_CR, CR_PS_P1);
+	curr_page = inb(IO_DP8390 + DP_CURR);
+	outb(IO_DP8390 + DP_CR, CR_PS_P0);
+
+	if (curr_page == PAGE_RX_END)
+		curr_page = PAGE_RX_START;
+
+	if (curr_page == bound_page)
+		return 0;
+	ne2000_memread((unsigned int)(bound_page << 8), (unsigned char*)&rb, 4);
+len2 = rb.len;
+#if 0
+printk("[%x,%x:%x,%x,%x]", bound_page, curr_page, rb.status, rb.bound, rb.len);
+#endif
+
+	rx_start = (bound_page << 8) + 4;
+	rx_len = rb.len - 4;
+	rx_bound = rb.bound;
+
+	if ((rb.status & RSR_PRX) != 0  && rx_len >= 14 && rx_len <= 1514) {
+		rx_remain_len = rx_len;
+		rx_sub_len = PAGE_RX_END * 256 - rx_start;
+		if (rx_sub_len < rx_len) {
+			ne2000_memread(rx_start, buf, rx_sub_len);
+			rx_start = PAGE_RX_START * 256;
+			buf += rx_sub_len;
+			rx_remain_len = rx_len - rx_sub_len;
+		}
+/*
+printk("pre-read");
+*/
+		ne2000_memread(rx_start, buf, rx_remain_len);
+ether_input(buf2, len2);
+	}
+#if 0
+{
+printk("dst = ");
+printk("%x:",	buf2[0]);
+printk("%x:",	buf2[1]);
+printk("%x:",	buf2[2]);
+printk("%x:",	buf2[3]);
+printk("%x:",	buf2[4]);
+printk("%x ",	buf2[5]);
+printk("src = ");
+printk("%x:", buf2[0]);
+printk("%x:", buf2[1]);
+printk("%x:", buf2[2]);
+printk("%x:", buf2[3]);
+printk("%x:", buf2[4]);
+printk("%x\n", buf2[5]);
+}
+#endif
+
+	bound_page = rx_bound;
+	if (bound_page == PAGE_RX_START)
+		bound_page = PAGE_RX_END;
+	bound_page --;
+
+	outb(IO_DP8390 + DP_BNRY, bound_page);
+
+	/* clear interrupt status */
+	outb(IO_DP8390 + DP_ISR, 0xff);
+
+#if 0
+	printk("ne2000:rcv\n");
+	page_no = inb(IO_DP8390 + DP_BNRY) + 1;
+	if (page_no == ed.stoppage)
+		page_no = ed.startpage;
+	flag = 1;
+	do {
+		outb(IO_DP8390 + DP_CR, CR_PS_P1);
+		curr = inb(IO_DP8390 + DP_CURR);
+		outb(IO_DP8390 + DP_CR, CR_PS_P0);
+		if (curr == page_no)
+			break;
+		ne2000_getblock(page_no, 0, sizeof(header), (char*)&header);
+		ne2000_getblock(page_no, sizeof(rcv_header_t),
+			sizeof(ethernet_t), (char*)&ether);
+
+len = (header.rbcl | (header.rbch << 8)) - sizeof(rcv_header_t);
+printk("page_no = %x, curr = %x, length = %x\n", page_no, curr, len);
+printk("dst = ");
+printk("%x:",	ether.dst[0]);
+printk("%x:",	ether.dst[1]);
+printk("%x:",	ether.dst[2]);
+printk("%x:",	ether.dst[3]);
+printk("%x:",	ether.dst[4]);
+printk("%x\n",	ether.dst[5]);
+printk("src = ");
+printk("%x:", ether.src[0]);
+printk("%x:", ether.src[1]);
+printk("%x:", ether.src[2]);
+printk("%x:", ether.src[3]);
+printk("%x:", ether.src[4]);
+printk("%x\n", ether.src[5]);
+printk("type= %x\n", ether.type);
+		next = header.next;
+
+
+		if ((header.status & RSR_PRX)) {
+			flag = 0;
+		} else
+			next = curr;
+		
+		if (next == ed.startpage)
+			outb(IO_DP8390 + DP_BNRY, ed.stoppage - 1);
+		else
+			outb(IO_DP8390 + DP_BNRY, next - 1);
+		
+		page_no = next;
+	} while (flag);
+
+#endif
+	return 0;
+}
+
+/* ne2000_intr --------------------------------------------------------------*/
+int
+ne2000_intr()
+{
+	int	tsr;
+	int	isr;
+	static	char	buf[1600];
+ne2000_rcv(buf, 1600);
+return 0;
+
+	while (1) {
+		isr = inb(IO_DP8390 + DP_ISR);
+		if (isr == 0)
+			break;
+		outb(IO_DP8390 + DP_ISR, isr);
+		if (isr & (ISR_PTX | ISR_TXE)) {
+			/* transmit -----------------------------------------*/
+			if (isr & ISR_TXE) {
+				/* send error -------------------------------*/
+			}
+		} else {
+			tsr = inb(IO_DP8390 + DP_TSR);
+			if (tsr & TSR_PTX) ; 
+			if (tsr & TSR_DFR) ;
+			if (tsr & TSR_COL) ;
+			if (tsr & TSR_ABT) ;
+			if (tsr & TSR_CRS) ;
+		}
+
+		if (isr & ISR_PRX) {
+/*
+			ne2000_rcv(buf, 1600);
+*/
+		}
+		if (isr & ISR_CNT) {
+printk("ne2000:CNTR-CNTR-CNTR-CNTR\n");
+			inb(IO_DP8390 + DP_CNTR0);
+			inb(IO_DP8390 + DP_CNTR1);
+			inb(IO_DP8390 + DP_CNTR2);
+		}
+		if (isr & ISR_RST)
+			ne2000_reset();
+printk("ISR: %x\n", isr);
+	}
+
+	return 0;
+}
+
+/* ne2000_reset -------------------------------------------------------------*/
+void
+ne2000_reset()
+{
+	int	i;
+printk("ne2000:reset - reset - reset - reset - reset- reset - reset \n");
+	outb(IO_DP8390 + DP_CR, CR_STP | CR_DM_ABORT);
+	outb(IO_DP8390 + DP_RBCR0, 0);
+	outb(IO_DP8390 + DP_RBCR1, 0);
+	i = 0;
+	while (i < 1000) {
+		if ((inb(IO_DP8390 + DP_ISR) & ISR_RST) != 0)
+			break;
+		i ++;
+	}
+	outb(IO_DP8390 + DP_TCR, TCR_1EXTERNAL | TCR_OFST);
+	outb(IO_DP8390 + DP_CR, CR_STA | CR_DM_ABORT);
+	outb(IO_DP8390 + DP_TCR, TCR_NORMAL | TCR_OFST);
+	i = 0;
+	while (i < 1000) {
+		if ((inb(IO_DP8390 + DP_ISR) & ISR_RDC) != 0)
+			break;
+		i ++;
+	}
+	outb(IO_DP8390 + DP_ISR, inb(IO_DP8390 + DP_ISR) & ~ISR_RDC);
+}
+
+void
+ne2000_getblock(int page, unsigned short offset, unsigned short size, char* dst)
+{
+	int	i;
+/*
+	short*	p = (short*)dst;
+*/
+	char	c;
+	offset = page * DP_PAGESIZE + offset;
+	outb(IO_DP8390 + DP_RBCR0, size & 0xff);
+	outb(IO_DP8390 + DP_RBCR1, size >> 8);
+	outb(IO_DP8390 + DP_RSAR0, offset & 0xff);
+	outb(IO_DP8390 + DP_RSAR1, offset >> 8);
+	outb(IO_DP8390 + DP_CR, CR_DM_RR | CR_PS_P0 | CR_STA);
+#if 1
+	for (i = 0 ; i < size ; i ++) {
+		c = *dst ++ = (char)inb(DP_DATA);
+printk("[%x]", c & 0xff);
+		c = (char)inb(DP_DATA);	/* dummy */
+printk("[%x]", c & 0xff);
+	}
+#else
+	for (i = 0 ; i < size ; i += 2)
+		*p ++ = (short)inw(DP_DATA);
+#endif
+}
+
+
+/* ne2000_memread -----------------------------------------------------------*/
+void
+ne2000_memread(unsigned int src, unsigned char* dst, unsigned int len)
+{
+	int	i;
+#if 0
+	outb(IO_DP8390 + DP_RBCR0, 6 * 2);
+	outb(IO_DP8390 + DP_RBCR1, 0);
+	outb(IO_DP8390 + DP_RSAR0, 0);
+	outb(IO_DP8390 + DP_RSAR1, 0);
+	outb(IO_DP8390 + DP_CR, CR_DM_RR | CR_PS_P0 | CR_STA);
+#endif
+
+len <<= 1;
+	outb(IO_DP8390 + DP_CR, CR_DM_ABORT | CR_STA);
+	outb(IO_DP8390 + DP_RBCR0, len & 0xff);
+	outb(IO_DP8390 + DP_RBCR1, (len >> 8) & 0xff);
+	outb(IO_DP8390 + DP_RSAR0, src & 0xff);
+	outb(IO_DP8390 + DP_RSAR1, (src >> 8) & 0xff);
+	outb(IO_DP8390 + DP_CR, CR_DM_RR | CR_PS_P0 | CR_STA);
+
+printk("*");
+	for (i = 0 ; i < len / 2 ; i ++) {
+		*dst = inb(IO_DP8390 + NE_DATA);
+#if 0
+printk("{%x}", *dst & 0xff);
+#endif
+/*
+		*(dst + 1) = inb(IO_DP8390 + NE_DATA);
+*/
+		dst ++;
+	}
+}
+
+/* ne2000_memwrite ----------------------------------------------------------*/
+void
+ne2000_memwrite(unsigned char* src, unsigned int dst, unsigned int len)
+{
+	int	i;
+	/* clear status register */
+	outb(IO_DP8390 + DP_CR, CR_DM_ABORT | CR_STA);
+	outb(IO_DP8390 + DP_ISR, ISR_RDC);
+
+	/* length */
+	outb(IO_DP8390 + DP_RBCR0, len & 0xff);
+	outb(IO_DP8390 + DP_RBCR1, (len >> 8) & 0xff);
+
+	/* destination address */
+	outb(IO_DP8390 + DP_RSAR0, dst & 0xff);
+	outb(IO_DP8390 + DP_RSAR1, (dst >> 8) & 0xff);
+
+	outb(IO_DP8390 + DP_CR, CR_DM_RW | CR_PS_P0 | CR_STA);
+
+	for (i = 0 ; i < len ; i ++) {
+		outb(IO_DP8390 + NE_DATA, src[i]);
+	}
+
+	for (i = 0 ; i < 256 ; i ++) {
+		if ((inb(IO_DP8390 + DP_ISR) & ISR_RDC) == 0)
+			break;
+	}
+}

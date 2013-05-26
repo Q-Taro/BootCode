@@ -1,0 +1,470 @@
+# Copyright (c) 2000 by Tsuyoshi Ishii. All rights reserved. -----------------#
+# assembler interrupt entry --------------------------------------------------#
+# 32 bit protect mode --------------------------------------------------------#
+
+.globl		intr_divide
+.globl		intr_singlestep
+.globl		intr_nmi
+.globl		intr_breakpoint
+.globl		intr_overflow
+.globl		intr_bounds
+.globl		intr_opcode
+.globl		intr_copr_not_available
+.globl		intr_doublefault
+.globl		intr_copr_seg_overrun
+.globl		intr_tss
+.globl		intr_segment_not_present
+.globl		intr_stack
+.globl		intr_general
+.globl		intr_page
+.globl		intr_copr_error
+.globl		intr_irq0
+.globl		intr_irq1
+.globl		intr_irq2
+.globl		intr_irq3
+.globl		intr_irq4
+.globl		intr_irq5
+.globl		intr_irq6
+.globl		intr_irq7
+.globl		intr_irq8
+.globl		intr_irq9
+.globl		intr_irq10
+.globl		intr_irq11
+.globl		intr_irq12
+.globl		intr_irq13
+.globl		intr_irq14
+.globl		intr_irq15
+.globl		intr_apic
+.globl		intr_syscall
+.globl		intr_smp_timer0
+.globl		intr_smp_timer1
+
+.globl		intr_default
+.globl		user_restore
+
+.extern		nest
+.extern		old_stack
+.extern		current_proc
+.extern		sleep_current_proc
+.extern		ena_tex
+.extern		cpu_num
+.extern		sched_next_tsk_check
+.extern		tishi_test
+.extern		tishi_test2
+
+# first CPU ------------------------------------------------------------------#
+.globl		k_nest0
+# second CPU -----------------------------------------------------------------#
+.globl		k_nest1
+
+# interrupt nest counter -----------------------------------------------------#
+k_nest0:	.long	0	
+k_nest1:	.long	0
+
+# save -----------------------------------------------------------------------#
+save:
+		
+		pushl	%ebx
+		pushl	%eax
+
+#		movl	k_nest, %eax
+#		incl	%eax
+#		movl	%eax, k_nest
+
+		movl	$0xfee00020, %ebx
+		movl	(%ebx), %eax
+		leal	current_proc, %ebx
+		test	$0xffffffff, %eax
+		jz	1f
+		# single processor -------------------------------------------#
+		movl	cpu_num, %eax
+		subl	$1, %eax
+		jnz	1f
+		addl	$4, %ebx
+		
+		movl	k_nest1, %eax
+		incl	%eax
+		movl	%eax, k_nest1
+
+		jmpl	2f
+1:
+		movl	k_nest0, %eax
+		incl	%eax
+		movl	%eax, k_nest0
+2:
+		movl	(%ebx), %ebx
+		pushl	(%ebx)
+
+		movl	(%ebx), %eax
+		addl	$52, %eax
+		movl	%eax, (%ebx)
+
+		popl	%ebx
+# %ecx (0) -------------------------------------------------------------------#
+		movl	%ecx, (%ebx)
+# %edx (1) -------------------------------------------------------------------#
+		movl	%edx, 4(%ebx)
+# %esp (2) -------------------------------------------------------------------#
+#		movl	20(%esp), %eax
+		movl	24(%esp), %eax	
+		movl	%eax, 8(%ebx)
+# %eip (3) -------------------------------------------------------------------#
+#		movl	8(%esp), %eax
+		movl	12(%esp), %eax
+		movl	%eax, 12(%ebx)
+
+# %ebp (4) -------------------------------------------------------------------#
+		movl	%ebp, 16(%ebx)
+# %esi (5) -------------------------------------------------------------------#
+		movl	%esi, 20(%ebx)
+# %edi (6) -------------------------------------------------------------------#
+		movl	%edi, 24(%ebx)
+# %eflags (7) ----------------------------------------------------------------#
+		pushfl
+		popl	%eax
+		movl	%eax, 28(%ebx)
+
+# %eax (8) -------------------------------------------------------------------#
+		movl	4(%esp), %eax
+		movl	%eax, 32(%ebx)
+# %ebx (9) -------------------------------------------------------------------#
+		movl	(%esp), %eax
+		movl	%eax, 36(%ebx)
+
+# %ds (10) -------------------------------------------------------------------#
+		movw	%ds, %ax
+		movl	%eax, 40(%ebx)
+# %es (11) -------------------------------------------------------------------#
+		movw	%es, %ax
+		movl	%eax, 44(%ebx)
+
+		# save %esp to stack of proc
+		popl	%eax
+		popl	%ebx
+		ret
+
+# restore --------------------------------------------------------------------#
+restore:
+		movl	$0xfee00020, %ebx
+		movl	(%ebx), %eax
+		leal	current_proc, %ebx
+		test	$0xffffffff, %eax
+		jz	1f
+		# single processor -------------------------------------------#
+		movl	cpu_num, %eax
+		subl	$1, %eax
+		jnz	1f
+
+		addl	$4, %ebx
+
+		movl	k_nest1, %eax
+		decl	%eax
+		movl	%eax, k_nest1
+		pushl	%eax
+		jmpl	2f
+1:
+		movl	k_nest0, %eax
+		decl	%eax
+		movl	%eax, k_nest0
+		pushl	%eax
+2:
+
+		popl	%eax
+		test	$0xffffffff, %eax
+		pushl	%eax
+		jnz	3f
+# must disable all interrupts ------------------------------------------------#
+		pushl	%ebx
+		call	sched_next_tsk_check
+		popl	%ebx
+		test	$0xffff, %ax
+		jz	3f
+
+		movl	$0xfee00020, %ebx
+		movl	(%ebx), %eax
+		leal	current_proc, %ebx
+		test	$0xffffffff, %eax
+		jz	3f
+		# single processor -------------------------------------------#
+		movl	cpu_num, %eax
+		subl	$1, %eax
+		jnz	3f
+
+		addl	$4, %ebx
+3:
+		movl	(%ebx), %ebx
+		movl	(%ebx), %eax
+		subl	$52, %eax
+		movl	%eax, (%ebx)
+		movl	%eax, %ebx
+		
+# %ecx (0) -------------------------------------------------------------------#
+		movl	(%ebx), %ecx
+# %edx (1) -------------------------------------------------------------------#
+		movl	4(%ebx), %edx
+
+# %ebp (4) -------------------------------------------------------------------#
+		movl	16(%ebx), %ebp
+# %esi (5) -------------------------------------------------------------------#
+		movl	20(%ebx), %esi
+# %edi (6) -------------------------------------------------------------------#
+		movl	24(%ebx), %edi
+# %eflags (7) ----------------------------------------------------------------#
+		movl	28(%ebx), %eax
+		pushl	%eax
+		popfl
+
+		popl	%eax
+		test	$0xffffffff, %eax
+		jnz	4f
+
+# process exchange -----------------------------------------------------------#
+# 8 = 2 * 4, ESP
+# 12 = 3 * 4, EIP
+		movl	8(%ebx), %eax
+		movl	%eax, 16(%esp)
+		movl	12(%ebx), %eax
+		movl	%eax, 4(%esp)
+4:
+		movl	32(%ebx), %eax
+		pushl	%eax
+		movl	36(%ebx), %eax
+		pushl	%eax
+		movl	40(%ebx), %eax
+		movw	%ax, %ds
+		movl	44(%ebx), %eax
+		movw	%ax, %es
+		
+		# if jump & return to user mode, change %eip and %esp
+#		movl	k_nest, %eax
+#		decl	%eax
+#		movl	%eax, k_nest
+
+#		movl	8(%ebx), %eax
+#		movl	%eax, 24(%esp)
+#		movl	12(%ebx), %eax
+#		movl	%eax, 12(%esp)
+
+		popl	%ebx
+		popl	%eax
+		ret
+
+# user_restore ---------------------------------------------------------------#
+user_restore:
+		addl	$8, %esp
+		call	ena_tex
+		popfl
+		popl	%edi	
+		popl	%esi
+		popl	%edx
+		popl	%ecx
+		popl	%ebx
+		popl	%eax
+		ret
+
+# intr_default ---------------------------------------------------------------#
+intr_default:
+		call	save
+		call	c_intr_default
+		call	restore
+		iret
+
+# intr_divide ----------------------------------------------------------------#
+intr_divide:
+		call	save
+		call	c_intr_divide
+		call	restore
+		iret
+# intr_singlestep ------------------------------------------------------------#
+intr_singlestep:
+		iret
+# intr_nmi -------------------------------------------------------------------#
+intr_nmi:
+		iret
+# intr_breakpoint ------------------------------------------------------------#
+intr_breakpoint:
+		iret
+# intr_overflow --------------------------------------------------------------#
+intr_overflow:
+		iret
+# intr_bounds ----------------------------------------------------------------#
+intr_bounds:
+		iret
+# intr_opcode ----------------------------------------------------------------#
+intr_opcode:
+		iret
+# intr_copr_not_available ----------------------------------------------------#
+intr_copr_not_available:
+		iret	
+# intr_doublefault -----------------------------------------------------------#
+intr_doublefault:
+		iret
+# intr_copr_seg_overrun ------------------------------------------------------#
+intr_copr_seg_overrun:
+		iret
+# intr_tss -------------------------------------------------------------------#
+intr_tss:
+		iret
+# intr_segment_not_present ---------------------------------------------------#
+intr_segment_not_present:
+		iret
+# intr_stack -----------------------------------------------------------------#
+intr_stack:
+		iret
+# intr_general ---------------------------------------------------------------#
+intr_general:
+		call 	save
+		call	c_intr_default2
+		call	restore
+		iret
+# intr_page ------------------------------------------------------------------#
+intr_page:
+		iret
+# intr_copr_error ------------------------------------------------------------#
+intr_copr_error:
+		iret
+
+# intr_irq0 ------------------------------------------------------------------#
+intr_irq0:
+		call	save
+		call	c_intr_irq0
+		call	restore
+		iret
+# intr_irq1 ------------------------------------------------------------------#
+intr_irq1:
+		call	save
+		call	irq_enter
+		sti
+		call	c_intr_irq1
+		cli
+		call	irq_exit	
+		call	restore
+		iret
+# intr_irq2 ------------------------------------------------------------------#
+intr_irq2:
+		call	save
+		call	c_intr_irq2
+		call	restore
+		iret
+# intr_irq3 ------------------------------------------------------------------#
+intr_irq3:
+		call	save
+		call	c_intr_irq3
+		call	restore
+		iret
+# intr_irq4 ------------------------------------------------------------------#
+intr_irq4:
+		call	save
+		call	c_intr_irq4
+		call	restore
+		iret
+# intr_irq5 ------------------------------------------------------------------#
+intr_irq5:
+		call	save
+		call	c_intr_irq5
+		call	restore
+		iret
+# intr_irq6 ------------------------------------------------------------------#
+intr_irq6:
+		call	save
+		call	c_intr_irq6
+		call	restore
+		iret
+# intr_irq7 ------------------------------------------------------------------#
+intr_irq7:
+		call	save
+		call	c_intr_irq7
+		call	restore
+		iret
+# intr_irq8 ------------------------------------------------------------------#
+intr_irq8:
+		call	save
+		call	c_intr_irq8
+		call	restore
+		iret
+# intr_irq9 ------------------------------------------------------------------#
+intr_irq9:
+		call	save
+		call	c_intr_irq9
+		call	restore
+		iret
+# intr_irq10 -----------------------------------------------------------------#
+intr_irq10:
+		call	save
+		call	c_intr_irq10
+		call	restore
+		iret
+# intr_irq11 -----------------------------------------------------------------#
+intr_irq11:
+		call	save
+		call	c_intr_irq11
+		call	restore
+		iret
+# intr_irq12 -----------------------------------------------------------------#
+intr_irq12:
+		call	save
+		call	c_intr_irq12
+		call	restore
+		iret
+# intr_irq13 -----------------------------------------------------------------#
+intr_irq13:
+		call	save
+		call	c_intr_irq13
+		call	restore
+		iret
+# intr_irq14 -----------------------------------------------------------------#
+intr_irq14:
+		call	save
+		call	c_intr_irq14
+		call	restore
+		iret
+# intr_irq15 -----------------------------------------------------------------#
+intr_irq15:
+		call	save
+		call	c_intr_irq15
+		call	restore
+		iret
+# intr_apic ------------------------------------------------------------------#
+intr_apic:
+		call	save
+		call	c_intr_apic
+		call	restore
+		iret
+
+# intr_syscall ---------------------------------------------------------------#
+intr_syscall:
+		call	save
+		movl	$0xfee00020, %ebx
+		movl	(%ebx), %eax
+
+		movl	12(%esp), %ebx
+
+		pushl	36(%ebx)
+		pushl	32(%ebx)
+		pushl	28(%ebx)
+		pushl	24(%ebx)
+
+		pushl	20(%ebx)
+		pushl	16(%ebx)
+		pushl	12(%ebx)
+		pushl	8(%ebx)
+		pushl	%eax
+
+		call	c_intr_syscall
+#		addl	$16, %esp
+		addl	$36, %esp
+		call	restore
+		iret
+
+# intr_smp_timer0 ------------------------------------------------------------#
+intr_smp_timer0:
+		call	save
+		call	c_intr_smp_timer0
+		call	restore
+		iret
+# intr_smp_timer1 ------------------------------------------------------------#
+intr_smp_timer1:
+		call	save
+		call	c_intr_smp_timer1
+		call	restore
+		iret

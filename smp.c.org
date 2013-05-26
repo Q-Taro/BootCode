@@ -1,0 +1,97 @@
+/* Copyright (c) 2000 by Tsuyoshi Ishii. All rights reserved. ---------------*/
+/* SMP ----------------------------------------------------------------------*/
+/* support only 2 CPU -------------------------------------------------------*/
+/* I don't know APIC ID of start up CPU, but 2nd CPU has 0 of APIC ID. ------*/
+
+#include "interrupt.h"
+#include "smpP.h"
+
+void
+smp_lock()
+{
+}
+
+void
+smp_unlock()
+{
+}
+
+void
+smp_eoi()
+{
+}
+
+/* smp_init -----------------------------------------------------------------*/
+void
+smp_init()
+{
+	static	int cpu_num = 0;
+	unsigned long*	p;
+	unsigned long	a;
+
+	/* step 3 -----------------------------------------------------------*/
+	
+	/* step 6 -----------------------------------------------------------*/
+	p = (unsigned long*)APIC_ID;
+	cpu[cpu_num].id = *p & 0xf000000;
+
+	/* step 7 -----------------------------------------------------------*/
+	cpu[cpu_num].id2 = cpu[cpu_num].id ^ 0x100000;
+	
+	/* step 9 -----------------------------------------------------------*/
+	p = (unsigned long*)SVR;
+	a = *p;
+	*p = (a | APIC_ENABLED);
+
+	/* step 10 ----------------------------------------------------------*/
+	p = (unsigned long*)LVT3;
+	a = *p;
+	*p = (a & (0xffffff00 | 0x000000aa /* VECT_APIC */));
+
+
+
+	if (cpu_num == 0) {
+		cpu_num ++;
+#if 1
+		/* step 11 --------------------------------------------------*/
+		p = (unsigned long*)ICR_HI;
+		a = *p;
+#if 0
+		/* this means broadcast.
+		 * resutl is ok but, i won't use this.
+		 */
+		*p = ((a & 0xf0ffffff) | 0x0f000000);
+#endif
+		*p = ((a & 0xf0ffffff) | 0x00000000);
+/*
+		*p = (a & 0xf0ffffff);
+		*p = cpu[cpu_num].id2;
+*/
+#endif
+#if 1
+		/* step 14 --------------------------------------------------*/
+		p = (unsigned long*)ICR_LOW;
+		a = *p;	
+		/* logical 
+		*p = ((a & (0xfff0f800) | 0x603));
+		*/
+		/* physical -------------------------------------------------*/
+		*p = ((a & (0xfff0f000) | 0x603));
+#endif
+		video_test1();
+	} else {
+		/* second CPU -----------------------------------------------*/
+		video_test2();
+	}
+	/* lvt1 -------------------------------------------------------------*/
+	p = (unsigned long*)LVT1;
+	a =  *p & 0xfffe58ff;
+	a |= 0x700;	
+	*p = a;
+	/* lvt2 -------------------------------------------------------------*/
+	p = (unsigned long*)LVT2;
+	a =  *p & 0xfffe58ff;
+	a |= 0x400;
+	*p = a;
+}
+
